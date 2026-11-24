@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=LLM-gui
+Comment=Chat with local language models through Ollama
+Exec=appLLM-gui
+Icon=io.github.chandandasgit.LLMgui
+Categories=Utility;Development;
+Keywords=LLM;Ollama;chat;
+Terminal=false

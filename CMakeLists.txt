@@ -86,6 +86,24 @@ target_link_libraries(appLLM-gui PRIVATE Qt6::Quick Qt6::Network Qt6::Concurrent
 # The recommended models (":/resources/catalogue.json").
 qt_add_resources(appLLM-gui catalogue PREFIX "/" FILES resources/catalogue.json)
 
+# The window icon (":/icons/icon.svg").
+qt_add_resources(appLLM-gui app_icon PREFIX "/icons" BASE "${CMAKE_CURRENT_LIST_DIR}/resources/icons"
+                 FILES resources/icons/icon.svg)
+
+# The version a release passes in (-DAPP_VERSION=1.0); other builds use the project version.
+if(NOT DEFINED APP_VERSION)
+    set(APP_VERSION "${PROJECT_VERSION}")
+endif()
+target_compile_definitions(appLLM-gui PRIVATE APP_VERSION="${APP_VERSION}")
+
+# Installed layout (the AppImage and the tarball are made from it: packaging/linux).
+include(GNUInstallDirs)
+set(APP_ID io.github.chandandasgit.LLMgui)
+install(TARGETS appLLM-gui RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES packaging/linux/${APP_ID}.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES resources/icons/icon.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+        RENAME ${APP_ID}.svg)
+
 # ---------------------------------------------------------------- the wrapper tests (Qt, fake Ollama)
 # tests/wrapper/abc_qtcheck.cpp is found by itself, and ctest gets one entry named qtabc.
 if(TARGET Qt6::Test)

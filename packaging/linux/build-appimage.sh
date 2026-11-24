@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# Builds LLM-gui and puts these files into dist/:
+#   LLM-gui-<version>-x86_64.AppImage
+#   LLM-gui-<version>-linux-x86_64.tar.xz   (with install-app.sh, uninstall-app.sh and LICENSE inside)
+#   SHA256SUMS.txt
+#
+# Usage:  ./packaging/linux/build-appimage.sh 1.0
+# Needs:  Qt 6 (qmake6 or qmake on PATH, or QMAKE=/path/to/qmake6), cmake, curl, a C++20 compiler, rsvg-convert (librsvg2-bin) or ImageMagick for the icon.
+# Downloads linuxdeploy, its Qt plugin and appimagetool into tools/ the first time.
+set -euo pipefail
+
+VERSION="${1:?usage: $0 <version>   for example: $0 1.0}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$ROOT"
+
+NAME=LLM-gui
+ID=io.github.chandandasgit.LLMgui
+EXE=appLLM-gui
+ARCH=x86_64
+APPDIR="$ROOT/AppDir"
+DIST="$ROOT/dist"
+TOOLS="$ROOT/tools"
+BUILD="$ROOT/build-release"
+
+export ARCH
+export APPIMAGE_EXTRACT_AND_RUN=1   # run the downloaded AppImage tools without FUSE
+export NO_STRIP=1                   # linuxdeploy's old "strip" breaks libraries from new distros
+export PATH="$TOOLS:$PATH"
+
+# ------------------------------------------------------------------ find Qt
+QMAKE="${QMAKE:-$(command -v qmake6 || command -v qmake || true)}"
+if [ -z "$QMAKE" ]; then
+  echo "qmake not found. Put Qt's bin folder on PATH or run: QMAKE=/path/to/qmake6 $0 $VERSION" >&2
+  exit 1
+fi
+export QMAKE
+QT_PREFIX="$("$QMAKE" -query QT_INSTALL_PREFIX)"
+QT_LIBS="$("$QMAKE" -query QT_INSTALL_LIBS)"
+QT_PLUGINS="$("$QMAKE" -query QT_INSTALL_PLUGINS)"
+QT_QML="$("$QMAKE" -query QT_INSTALL_QML)"
+echo "Using Qt from $QT_PREFIX"
+
+# ------------------------------------------------------------------ tools (downloaded once into tools/)
+mkdir -p "$TOOLS"
+fetch() {   # fetch <url> <file name>
+  if [ ! -x "$TOOLS/$2" ]; then
+    echo "Downloading $2"
+    curl -fL --retry 3 -o "$TOOLS/$2" "$1"
+    chmod +x "$TOOLS/$2"
+  fi
+}
+fetch https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+      linuxdeploy-x86_64.AppImage
+fetch https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage \
+      linuxdeploy-plugin-qt-x86_64.AppImage
+fetch https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+      appimagetool-x86_64.AppImage
+
+# ------------------------------------------------------------------ build and install into AppDir
+rm -rf "$APPDIR" "$DIST" "$BUILD"
+mkdir -p "$DIST"
+
+cmake -S . -B "$BUILD" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr \
+  -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
+  -DAPP_VERSION="$VERSION"
+cmake --build "$BUILD" -j"$(nproc)"
+DESTDIR="$APPDIR" cmake --install "$BUILD"
+
+DESKTOP="$APPDIR/usr/share/applications/$ID.desktop"
+ICON="$APPDIR/usr/share/icons/hicolor/scalable/apps/$ID.svg"
+for f in "$DESKTOP" "$ICON" "$APPDIR/usr/bin/$EXE"; do
+  [ -e "$f" ] || { echo "Missing after install: $f" >&2; exit 1; }
+done
+
+# ------------------------------------------------------------------ let linuxdeploy collect Qt
+# Only the QML files are scanned for imports (not the build folders or old test files).
+QML_DIR="$BUILD/qml-sources"
+mkdir -p "$QML_DIR"
+cp Main.qml "$QML_DIR/"
+cp -r frontend "$QML_DIR/"
+export QML_SOURCES_PATHS="$QML_DIR"
+
+# Wayland support. Qt 6.10 and newer have one plugin (libqwayland.so); older Qt has two.
+PLATFORMS=""
+for p in libqwayland.so libqwayland-generic.so libqwayland-egl.so; do
+  if [ -f "$QT_PLUGINS/platforms/$p" ]; then PLATFORMS="${PLATFORMS:+$PLATFORMS;}$p"; fi
+done
+export EXTRA_PLATFORM_PLUGINS="$PLATFORMS"
+
+EXTRA=""
+for d in wayland-decoration-client wayland-graphics-integration-client wayland-shell-integration; do
+  if [ -d "$QT_PLUGINS/$d" ]; then EXTRA="${EXTRA:+$EXTRA;}$d"; fi
+done
+export EXTRA_QT_PLUGINS="$EXTRA"
+
+linuxdeploy-x86_64.AppImage \
+  --appdir "$APPDIR" \
+  --executable "$APPDIR/usr/bin/$EXE" \
+  --desktop-file "$DESKTOP" \
+  --icon-file "$ICON" \
+  --plugin qt
+
+# ------------------------------------------------------------------ Wayland OpenGL plugin
+# linuxdeploy does not pick this plugin up by itself. Without it the app cannot draw under Wayland.
+GFX="wayland-graphics-integration-client"
+if [ -d "$QT_PLUGINS/$GFX" ]; then
+  mkdir -p "$APPDIR/usr/plugins/$GFX"
+  for f in "$QT_PLUGINS/$GFX"/*.so; do
+    if [ ! -e "$f" ]; then continue; fi
+    case "$f" in
+      *-server.so) ;;   # server side plugins are not needed by an application
+      *) cp -L "$f" "$APPDIR/usr/plugins/$GFX/" ;;
+    esac
+  done
+fi
+for lib in libQt6WaylandClient.so.6 libQt6WaylandEglClientHwIntegration.so.6 libQt6WlShellIntegration.so.6; do
+  if [ ! -e "$APPDIR/usr/lib/$lib" ] && [ -e "$QT_LIBS/$lib" ]; then
+    cp -L "$QT_LIBS/$lib" "$APPDIR/usr/lib/"
+  fi
+done
+
+# ------------------------------------------------------------------ put back untouched libraries and plugins
+# The AppImage tools rewrite the headers of every library and plugin they bundle (to change where
+# they look for other libraries). On some systems that damages them and the app crashes at start-up
+# (it did on Fedora 44, in the Wayland libraries and then in the Wayland plugin).
+# So every library, Qt plugin and QML module is put back exactly as it is in Qt or on this system.
+# AppRun (written below) then sets the library paths itself, so the rewritten headers are not needed.
+original_lib() {   # original_lib <file name>  ->  path of the untouched 64-bit library, or nothing
+  local src="$QT_LIBS/$1"
+  if [ ! -e "$src" ]; then
+    src="$( { ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null || true; } \
+            | awk -v l="$1" '$1 == l && /x86-64/ && !found { print $NF; found = 1 }' )"
+  fi
+  printf '%s' "$src"
+}
+
+# libraries
+while IFS= read -r -d '' f; do
+  src="$(original_lib "$(basename "$f")")"
+  if [ -n "$src" ] && [ -e "$src" ]; then cp -L --remove-destination "$src" "$f"; fi
+done < <(find "$APPDIR/usr/lib" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -print0)
+
+# Qt plugins and QML modules (same relative path in Qt's own folders)
+restore_tree() {   # restore_tree <folder in AppDir> <same folder in Qt>
+  local f rel
+  if [ ! -d "$1" ]; then return 0; fi
+  while IFS= read -r -d '' f; do
+    rel="${f#"$1"/}"
+    if [ -f "$2/$rel" ]; then cp -L --remove-destination "$2/$rel" "$f"; fi
+  done < <(find "$1" -type f -name '*.so*' -print0)
+}
+restore_tree "$APPDIR/usr/plugins" "$QT_PLUGINS"
+restore_tree "$APPDIR/usr/qml" "$QT_QML"
+
+# AppRun: a small launcher that points the program at the bundled libraries, plugins and QML modules.
+rm -f "$APPDIR/AppRun"
+cat > "$APPDIR/AppRun" <<'EOF'
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export QT_PLUGIN_PATH="$HERE/usr/plugins"
+export QML_IMPORT_PATH="$HERE/usr/qml"
+export QML2_IMPORT_PATH="$HERE/usr/qml"
+exec "$HERE/usr/bin/appLLM-gui" "$@"
+EOF
+chmod +x "$APPDIR/AppRun"
+
+# ------------------------------------------------------------------ the AppImage
+# .DirIcon is the AppImage's own icon. appimagetool no longer makes it, and takes only a PNG (an SVG gets
+# "not valid", and later versions refuse to pack): render one from the SVG. rsvg-convert is librsvg2-bin.
+rm -f "$APPDIR/.DirIcon"
+if command -v rsvg-convert > /dev/null 2>&1; then
+  rsvg-convert -w 256 -h 256 -o "$APPDIR/.DirIcon" "$APPDIR/$ID.svg"
+elif command -v magick > /dev/null 2>&1; then
+  magick -background none -density 384 "$APPDIR/$ID.svg" -resize 256x256 "png:$APPDIR/.DirIcon"
+else
+  echo "Needs rsvg-convert (librsvg2-bin) or ImageMagick to make the AppImage icon." >&2
+  exit 1
+fi
+appimagetool-x86_64.AppImage --no-appstream "$APPDIR" "$DIST/$NAME-$VERSION-$ARCH.AppImage"
+
+# ------------------------------------------------------------------ the tarball
+PKG="$NAME-$VERSION-linux-$ARCH"
+STAGE="$BUILD/$PKG"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+cp -a "$APPDIR" "$STAGE/app"
+cp packaging/linux/install-app.sh packaging/linux/uninstall-app.sh LICENSE "$STAGE/"
+chmod +x "$STAGE/install-app.sh" "$STAGE/uninstall-app.sh"
+XZ_OPT=-T0 tar -C "$BUILD" -cJf "$DIST/$PKG.tar.xz" "$PKG"
+
+# ------------------------------------------------------------------ checksums
+(cd "$DIST" && sha256sum -- ./*.AppImage ./*.tar.xz > SHA256SUMS.txt)
+
+echo
+echo "Done. Files in $DIST:"
+ls -lh "$DIST"

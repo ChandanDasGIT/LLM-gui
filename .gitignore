@@ -1,4 +1,9 @@
 build*/
+AppDir/
+dist/
+tools/
+*.AppImage
+*.tar.xz
 
 CMakeCache.txt
 CMakeFiles/
