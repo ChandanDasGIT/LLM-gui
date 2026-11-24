@@ -3,7 +3,7 @@
 # Your chats, characters and settings are kept:
 #   ~/.local/share/LLM-gui and ~/.config/LLM-gui (delete those yourself to remove them too).
 # Your Ollama models are not touched.
-# PREFIX=/some/folder packaging/linux/uninstall.sh removes an install made with the same PREFIX.
+# PREFIX=/some/folder ./uninstall.sh removes an install made with the same PREFIX.
 set -euo pipefail
 
 prefix="${PREFIX:-$HOME/.local}"

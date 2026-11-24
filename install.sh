@@ -3,14 +3,14 @@
 #   ~/.local/bin/LLM-gui                                               the app
 #   ~/.local/share/icons/hicolor/scalable/apps/<app id>.svg            its icon
 #   ~/.local/share/applications/<app id>.desktop                       its launcher entry
-# PREFIX=/some/folder packaging/linux/install.sh installs under that folder instead of ~/.local.
+# PREFIX=/some/folder ./install.sh installs under that folder instead of ~/.local.
 # Needs cmake, a C++20 compiler and Qt 6 (Quick, Network, Concurrent) to build; Qt 6 from the
 # system at run time; and Ollama (https://ollama.com) installed and running to chat.
 # Your chats, characters and settings (~/.local/share/LLM-gui, ~/.config/LLM-gui) are not touched.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(cd "$here/../.." && pwd)"
+root="$here"
 prefix="${PREFIX:-$HOME/.local}"
 id="io.github.chandandasgit.LLMgui"
 build="$root/build-release"
@@ -27,7 +27,7 @@ install -Dm644 "$root/resources/icons/icon.svg" "$prefix/share/icons/hicolor/sca
 # The launcher runs the installed app by its full path, so ~/.local/bin need not be on PATH.
 entry="$(mktemp)"
 trap 'rm -f "$entry"' EXIT
-sed "s|^Exec=.*|Exec=$prefix/bin/LLM-gui|" "$here/$id.desktop" > "$entry"
+sed "s|^Exec=.*|Exec=$prefix/bin/LLM-gui|" "$root/packaging/linux/$id.desktop" > "$entry"
 install -Dm644 "$entry" "$prefix/share/applications/$id.desktop"
 
 if command -v update-desktop-database > /dev/null; then

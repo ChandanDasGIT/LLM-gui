@@ -75,13 +75,13 @@ Building needs **Qt 6.10 or newer**, CMake and a C++20 compiler.
    ```bash
    git clone https://github.com/ChandanDasGIT/LLM-gui.git
    cd LLM-gui
-   ./packaging/linux/install.sh
+   ./install.sh
    ```
 
    This builds a Release version in `build-release/` and installs the app as
    `~/.local/bin/LLM-gui`, with its icon and launcher entry under `~/.local/share`.
    To install somewhere else, set `PREFIX`, for example
-   `PREFIX=/opt/llm-gui ./packaging/linux/install.sh`.
+   `PREFIX=/opt/llm-gui ./install.sh`.
 
    A source build uses the Qt from your system, so keep those Qt packages installed.
 
@@ -99,7 +99,7 @@ Your chats, characters and settings are kept by both uninstallers (see below), a
 Ollama models are never touched.
 
 - Installed from the release: run `./uninstall-app.sh` from the unpacked folder.
-- Installed from source: run `./packaging/linux/uninstall.sh` from the source folder
+- Installed from source: run `./uninstall.sh` from the source folder
   (with the same `PREFIX` if you used one).
 - AppImage: delete the file.
 
